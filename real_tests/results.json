@@ -28,5 +28,10 @@
   {
     "model": "kontext",
     "error": "HTTP Error 403: Forbidden"
+  },
+  {
+    "model": "turbo",
+    "note": "最终烟雾测试: 经 demo_server 全局串行闸，含 20s 等待，端到端 53s，JPEG 768x768 102859B",
+    "ok": true
   }
 ]
