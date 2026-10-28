@@ -199,8 +199,8 @@ size 越界 → 400            PASS
 n=9 越界 → 400             PASS
 未知路由 → 404             PASS
 未知任务 → 404             PASS
-真实生图 768x768 flux      PASS  200  耗时 7.8s   b64 88892 chars
-去水印生成 512x512         PASS  200  耗时 44.7s  removed=True method=inpaint
+真实生图 768x768 flux      PASS  200  耗时 29.7s   attempts=2（首次遇 503，退避后成功）
+去水印生成 512x512         PASS  200  耗时 81.6s   removed=True method=inpaint
 异步任务创建                PASS  200
 异步任务完成                PASS  succeeded
 ────────────────────────────────────────────
@@ -208,6 +208,7 @@ n=9 越界 → 400             PASS
 ```
 
 > 真实用例之间需冷却约 30s（匿名额度 1 次/20s/IP），`stress_test.py` 已内置。
+> 高频使用同一 IP 数十分钟后上游会进入长冷却（持续 503→402），此时只能换出口 IP。
 
 真实出图证据见 [`real_tests/`](real_tests/)（`sana.jpg` / `flux-realism.jpg` / `turbo_768.jpg`，均为上游原始 JPEG）。
 
