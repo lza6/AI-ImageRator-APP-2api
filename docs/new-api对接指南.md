@@ -1,12 +1,16 @@
 # new-api 对接指南
 
-本项目提供 **OpenAI 兼容**接口，可通过 new-api 的「自定义渠道 / OpenAI 类型渠道」直接接入。
+本项目提供 **OpenAI 兼容**图像生成接口，可直接接入 new-api 的 OpenAI 类型渠道。
 
 服务地址示例：`http://127.0.0.1:8931`
 
+> 本文所有结论均对照 `new-api` 源码核实（`relay/channel/openai/adaptor.go` 的 `GetRequestURL`、
+> `relay/common/relay_utils.go` 的 `GetFullRequestURL`、`relaykit/dto/openai_image.go` 的 `ImageRequest`），
+> 不是猜测。
+
 ---
 
-## 方案 A：OpenAI 类型渠道（推荐）
+## 一、渠道配置（推荐方案）
 
 new-api 后台 → **渠道** → **添加渠道**
 
@@ -15,19 +19,37 @@ new-api 后台 → **渠道** → **添加渠道**
 | 类型 | `OpenAI` |
 | 名称 | `AI-ImageRator-2API` |
 | 分组 | 按需（如 `default`） |
-| 模型 | 见下方「模型填写」 |
-| 代理 | 留空 |
-| 密钥 | 任意非空值（如 `sk-imageRator`）—— 本服务不校验密钥 |
-| 代理地址 | 留空 |
+| 模型 | 见「二、模型填写」 |
 | **自定义接口地址** | `http://127.0.0.1:8931` |
+| 密钥 | 任意非空（如 `sk-imageRator`）—— 本服务不校验密钥 |
+| 代理 / 代理地址 | 留空（除非你要给每个渠道配独立出口 IP） |
 
-> ⚠️ new-api 的 OpenAI 渠道默认会请求 `/v1/chat/completions`。本服务**只提供图像端点**，因此：
-> - 用于**图像生成**时，请确认 new-api 版本支持 `/v1/images/generations` 转发（当前版本支持）
-> - 该渠道**不要**用于对话场景（会 404）
+### ⚠️ 地址不要带 `/v1`
 
-### 模型填写
+new-api 对 OpenAI 渠道的 URL 拼接是：
 
-在「模型」输入框中逐行或逗号分隔填入：
+```go
+// relay/channel/openai/adaptor.go → GetRequestURL，default 分支
+return relaycommon.GetFullRequestURL(info.ChannelBaseUrl, info.RequestURLPath, info.ChannelType)
+
+// relay/common/relay_utils.go
+fullRequestURL := fmt.Sprintf("%s%s", baseURL, requestURL)
+```
+
+`RequestURLPath` 就是客户端请求的原始路径 `/v1/images/generations`。
+
+所以：
+
+| 你填的接口地址 | new-api 实际请求 | 结果 |
+|---|---|---|
+| `http://127.0.0.1:8931` | `http://127.0.0.1:8931/v1/images/generations` | ✅ 正确 |
+| `http://127.0.0.1:8931/v1` | `http://127.0.0.1:8931/v1/v1/images/generations` | ❌ 404 |
+
+---
+
+## 二、模型填写
+
+「模型」输入框逐行或逗号分隔：
 
 ```
 flux
@@ -39,38 +61,210 @@ dall-e-3
 dall-e-2
 ```
 
-也可填写 OpenAI 别名（`dall-e-3` → `flux`，`dall-e-2` → `turbo`），便于已有客户端复用。
+OpenAI 别名可直接用（`dall-e-3` → `flux`，`dall-e-2` → `turbo`），方便已有客户端不改代码。
 
-### 验证
+| 模型 | 上游 | 状态 |
+|---|---|---|
+| `flux` / `flux-schnell` / `flux1schnell` / `dall-e-3` | `flux` | ✅ |
+| `turbo` / `dall-e-2` | `turbo` | ✅ |
+| `sana` | `sana` | ✅ |
+| `zimage` / `z-image` / `zimage-turbo` | `zimage` | ✅ |
+| `flux-realism` | `flux-realism` | ✅ |
+| `kontext` | `kontext` | ⚠️ 403（需 `image` 参数，纯文生图不支持） |
 
-渠道保存后点「测试」。因本服务无 `/v1/chat/completions`，测试可能报错，属正常现象 —— 请改用实际生图请求验证：
+---
+
+## 三、验证
+
+渠道保存后**不要用「测试」按钮**——该按钮发的是 `/v1/chat/completions`，本服务没有聊天端点，必然报错，属正常现象。
+
+用真实生图请求验证：
 
 ```bash
 curl -X POST http://<new-api>:3000/v1/images/generations \
-  -H 'Authorization: Bearer sk-<你的new-api令牌>' \
+  -H 'Authorization: Bearer sk-<你的 new-api 令牌>' \
   -H 'Content-Type: application/json' \
-  -d '{"model":"flux","prompt":"a cat","n":1,"size":"1024x1024"}'
+  -d '{"model":"flux","prompt":"a golden retriever puppy on green grass","n":1,"size":"1024x1024"}'
 ```
+
+预期响应（约 5–30 秒，受串行闸影响）：
+
+```json
+{
+  "created": 1793181900,
+  "data": [{
+    "b64_json": "/9j/4AAQSkZJRg...",
+    "url": "http://127.0.0.1:8931/outputs/a1b2c3d4e5f6a7b8.jpg",
+    "revised_prompt": "a golden retriever puppy on green grass",
+    "_meta": {
+      "model": "flux",
+      "seed": 1234567,
+      "attempts": 1,
+      "watermark_removed": false
+    }
+  }],
+  "elapsed": 5.7
+}
+```
+
+**拿到 `data[0].b64_json` 即说明全链路通。**
+
+> `_meta` 是本服务的附加字段，new-api 透传时通常忽略；不影响 OpenAI 兼容性。
 
 ---
 
-## 方案 B：自定义渠道 + 模型重定向
+## 四、水印处理（重要）
 
-若 new-api 版本对 OpenAI 渠道的图像端点支持不完整，可用自定义渠道：
+出图右下角的 pollinations.ai 水印是**上游服务端烙进 JPEG 的**，`nologo` 参数已被服务端忽略
+（EXIF 元数据回显 `"nologo":true` 但水印依旧），参数侧无法去除。
+
+要交付无水印图，**在请求里传 `watermark: false`**：
+
+```bash
+curl -X POST http://<new-api>:3000/v1/images/generations \
+  -H 'Authorization: Bearer sk-<令牌>' \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"sana","prompt":"a cat","n":1,"size":"1024x1024","watermark":false}'
+```
+
+### 为什么用 `watermark` 而不是 `remove_watermark`
+
+对照 `relaykit/dto/openai_image.go`：
+
+- `Watermark *bool \`json:"watermark,omitempty"\`` —— **已定义字段，会正常转发到上游**
+- 未知字段被收进 `Extra`，但 `MarshalJSON` 里合并逻辑**被刻意注释掉**
+  （源码注释：`// 不能合并ExtraFields！！！！！！！！`）
+
+所以经 new-api 时：
+
+| 字段 | 是否透传到本服务 |
+|---|---|
+| `watermark: false` | ✅ 透传（触发去水印） |
+| `remove_watermark: true` | ❌ 被 new-api 丢弃 |
+
+> 直连本服务（不经过 new-api）时两种写法都支持。
+
+### 备选：服务端全局默认去水印
+
+不想改请求体，可让服务默认去水印：
+
+```bash
+REMOVE_WATERMARK=1 WM_METHOD=auto python demo_server.py
+```
+
+之后 new-api 侧无需任何改动。
+
+### 质量说明
+
+| 方法 | 依赖 | 效果 |
+|---|---|---|
+| `cv2`（inpaint） | `opencv-python-headless` | 纯色/虚化背景几乎无痕；高频纹理（木纹/毛发）有轻微涂抹 |
+| `pillow`（clone） | 无 | 保留纹理但可能有轻微水平接缝 |
+
+去水印属对成品的二次修改，对保真度敏感的场景建议保留原图。
+
+---
+
+## 五、计费建议
+
+new-api 侧建议按 **图片张数** 计费，不要按 token。
+
+| 尺寸 | 建议倍率（相对 gpt-4o） |
+|---|---|
+| 512×512 | 1× |
+| 768×768 | 2× |
+| 1024×1024 | 3× |
+| 1344×768 / 768×1344 | 3× |
+
+原因：上游单张 5–30 秒，成本主要来自**串行等待**而非算力。
+
+---
+
+## 六、并发与扩容
+
+**单实例吞吐 ≈ 1 张 / 20 秒**（`MIN_INTERVAL=20` 串行闸）。
+
+```
+总吞吐（张/秒） ≈ 实例数 × 可用出口 IP 数 ÷ 20
+```
+
+要点：
+
+1. 每个实例必须配**独立出口 IP**（new-api 渠道的「代理」字段），同 IP 多实例无效
+2. **不要**调小 `MIN_INTERVAL`，只会更早触发 `503`/`402`
+3. 服务已内置 `503 Retry-After` 与 `402` 指数退避（`MAX_RETRIES` 默认 5），外层无需再包重试
+4. 客户端超时紧张时用异步端点 `POST /v1/images/async` + 轮询
+
+---
+
+## 七、故障排查
+
+| 现象 | 原因 | 处理 |
+|---|---|---|
+| 404 `not found` | 接口地址多写了 `/v1` | 改为 `http://127.0.0.1:8931` |
+| 渠道「测试」失败 | 本服务无 chat 端点 | 正常，用生图请求验证 |
+| `502` + `HTTP 503` | 匿名限流（连发） | 等 45–60s；调大 `MIN_INTERVAL` |
+| `502` + `HTTP 402` | 该 IP 额度耗尽 | 换出口 IP，或调大 `MAX_RETRIES` |
+| 连续多次 `502` | IP 进入长冷却（可达数十分钟） | 只能换 IP |
+| `upstream 403 (model ... unsupported)` | 模型不支持纯文生图 | 改用 `flux`/`turbo`/`sana`/`zimage` |
+| `400 prompt is required` | prompt 为空 | 检查请求体 |
+| `400 size out of range` | 边长超 128–1536 | 调整尺寸 |
+| `400 n must be 1..4` | n 越界 | 本服务上限 4（new-api 层是 128） |
+| 图片带水印 | 水印由上游强制烙入 | 传 `watermark: false` |
+| 响应 >20s | 串行闸排队 | 正常；用异步端点 |
+
+---
+
+## 八、健康检查与监控
+
+```bash
+curl http://127.0.0.1:8931/health
+```
+
+```json
+{
+  "status": "ok",
+  "ts": 1793188333,
+  "watermark": {
+    "default_remove": false,
+    "method": "off",
+    "capabilities": { "pillow": true, "opencv": true, "default": "auto" }
+  }
+}
+```
+
+| 端点 | 用途 |
+|---|---|
+| `GET /health` | 存活 + 水印能力探测 |
+| `GET /stats` | `requests` / `success` / `failed` / `bytes` |
+
+监控建议：`stats.failed / stats.requests > 20%` 说明限流严重，需扩 IP。
+
+---
+
+## 九、备选接入方式
+
+### 方案 B：自定义渠道（Custom）
+
+`GetRequestURL` 的 `ChannelTypeCustom` 分支是**原样返回** `ChannelBaseUrl`（仅替换 `{model}`）：
+
+```go
+case constant.ChannelTypeCustom:
+    url := info.ChannelBaseUrl
+    url = strings.Replace(url, "{model}", info.UpstreamModelName, -1)
+    return url, nil
+```
+
+因此自定义渠道必须填**完整路径**：
 
 | 字段 | 值 |
 |---|---|
-| 类型 | `自定义渠道`（Custom） |
-| 基础 URL | `http://127.0.0.1:8931/v1` |
-| 模型重定向 | 按需 |
+| 类型 | 自定义渠道 |
+| 基础 URL | `http://127.0.0.1:8931/v1/images/generations` |
 
-> 视 new-api 版本不同，自定义渠道的路径拼接规则可能是 `{base_url}/v1/xxx` 或 `{base_url}/xxx`。若出现 404，请把基础 URL 调整为 `http://127.0.0.1:8931` 或 `http://127.0.0.1:8931/v1` 后重试。
+不推荐——这样只能用于生图一个端点。
 
----
-
-## 方案 C：反向代理前置（最稳）
-
-若渠道配置路径拼接始终不匹配，用 Nginx 做一层归一化，确保 `/v1/*` 原样透传：
+### 方案 C：Nginx 归一化（路径总对不上时）
 
 ```nginx
 server {
@@ -81,124 +275,36 @@ server {
         proxy_set_header Host $host;
         proxy_read_timeout 300s;
     }
-
     location /outputs/ {
         proxy_pass http://127.0.0.1:8932/outputs/;
-    }
-
-    location / {
-        proxy_pass http://127.0.0.1:8932/;
     }
 }
 ```
 
-（把本服务监听端口设为 `8932`，即 `PORT=8932`）
+（本服务设 `PORT=8932`，new-api 指向 `http://<nginx>:8931`）
 
 ---
 
-## 水印处理
+## 十、对接检查清单
 
-出图右下角的 pollinations.ai 水印是**上游服务端烙进 JPEG 的**，`nologo` 参数已被服务端忽略（EXIF 元数据回显 `"nologo":true` 但水印依旧），参数侧无法去除。
-
-要交付无水印图片，二选一：
-
-### 方式一：服务端默认去水印
-
-```bash
-REMOVE_WATERMARK=1 WM_METHOD=auto python demo_server.py
-pip install pillow opencv-python-headless   # 启用 cv2 高质量 inpaint
-```
-
-此后所有请求都自动去水印，new-api 侧无需改动。
-
-### 方式二：按请求开启
-
-请求体加 `remove_watermark: true`。若 new-api 的渠道配置不能透传自定义字段，用方式一更省事。
-
-> ⚠️ 去水印属于对成品的二次修改：纯色/虚化背景几乎无痕，高频纹理区域可能有轻微涂抹。对保真度敏感的场景建议保留原图。
+- [ ] 服务已启动：`curl http://127.0.0.1:8931/health` 返回 `"status":"ok"`
+- [ ] 渠道类型 = `OpenAI`
+- [ ] 自定义接口地址 = `http://127.0.0.1:8931`（**无** `/v1` 后缀）
+- [ ] 密钥填了任意非空值
+- [ ] 模型列表已填（至少 `flux`）
+- [ ] 用生图 curl 打通，拿到 `data[0].b64_json`
+- [ ] 如需无水印：确认请求带 `watermark: false`，或服务以 `REMOVE_WATERMARK=1` 启动
+- [ ] 查看 `GET /stats`，`failed` 占比正常
 
 ---
 
-## 计费与配额建议
-
-new-api 侧建议按 **图片张数** 计费，而不是按 token。
-
-参考倍率（相对 gpt-4o 计费模型）：
-
-| 尺寸 | 建议倍率 |
-|---|---|
-| 512×512 | 1× |
-| 768×768 | 2× |
-| 1024×1024 | 3× |
-| 1344×768 / 768×1344 | 3× |
-
-原因：上游单张耗时约 5–20 秒，且受 1 次/20 秒/IP 的额度限制，成本主要来自**串行等待时间**而非算力。
-
----
-
-## 并发与扩容
-
-**单实例上限 ≈ 1 张 / 20 秒**（`MIN_INTERVAL=20`）。
-
-扩容公式：
-
-```
-总吞吐（张/秒） ≈ 实例数 × 可用出口 IP 数 ÷ 20
-```
-
-要点：
-
-1. 每实例必须配独立出口 IP（new-api 渠道侧配代理）
-2. **不要**调小 `MIN_INTERVAL` —— 只会把 `503`/`402` 提前
-3. 服务已内置 `503 Retry-After` 与 `402` 的自动退避重试，通常无需外层再包重试
-4. 长任务建议客户端用 `POST /v1/images/async` + 轮询，避免 HTTP 超时
-
----
-
-## 故障排查
-
-| 现象 | 原因 | 处理 |
-|---|---|---|
-| `502 upstream_error` + `HTTP 503` | 触发匿名限流（连发） | 等待 45–60s；调大 `MIN_INTERVAL` |
-| `502` + `HTTP 402` | 额度耗尽（该 IP 已长时间高频） | 换出口 IP；或调大 `MAX_RETRIES` 走指数退避 |
-| 连续多次 502 | 该 IP 进入长冷却（可数十分钟） | 只能换 IP，重试无意义 |
-| `upstream 403 (model ... unsupported)` | 该模型不支持纯文生图（如 `kontext`） | 改用 `flux` / `turbo` / `sana` / `zimage` |
-| `400 prompt is required` | prompt 为空 | 检查请求体 |
-| `400 size out of range` | 边长超 128–1536 | 调整尺寸 |
-| new-api 渠道测试失败 | 本服务无 chat 端点 | 正常，用生图请求验证 |
-| 图片右下角有水印 | 服务端强制烙入，`nologo` 已失效 | 用 `REMOVE_WATERMARK=1` 或请求 `remove_watermark:true` |
-| 响应很慢（>20s） | 串行闸等待 | 正常行为，用异步端点 |
-
----
-
-## 健康检查与监控
-
-| 端点 | 用途 |
-|---|---|
-| `GET /health` | 存活检查，返回 `{"status":"ok","ts":...}` |
-| `GET /stats` | 累计 requests / success / failed / bytes |
-
-建议监控 `stats.failed / stats.requests` 比值，超过 20% 说明限流严重，需扩 IP。
-
----
-
-## 最小可用配置速查
+## 十一、最小配置速查
 
 ```yaml
-类型:        OpenAI
-名称:        AI-ImageRator-2API
-自定义接口:  http://127.0.0.1:8931
-密钥:        sk-imageRator          # 任意非空
-模型:        flux,turbo,sana,zimage,flux-realism,dall-e-3,dall-e-2
+类型:         OpenAI
+名称:         AI-ImageRator-2API
+自定义接口:   http://127.0.0.1:8931      # 不要带 /v1
+密钥:         sk-imageRator              # 任意非空
+模型:         flux,turbo,sana,zimage,flux-realism,dall-e-3,dall-e-2
+去水印:       请求体 watermark:false（或服务端 REMOVE_WATERMARK=1）
 ```
-
-**验证命令**（走 new-api）：
-
-```bash
-curl -X POST http://<new-api>:3000/v1/images/generations \
-  -H 'Authorization: Bearer sk-<new-api令牌>' \
-  -H 'Content-Type: application/json' \
-  -d '{"model":"flux","prompt":"a red apple on a wooden table","n":1,"size":"1024x1024"}'
-```
-
-预期：约 5–20 秒返回，`data[0].b64_json` 有值。

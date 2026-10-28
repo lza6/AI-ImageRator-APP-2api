@@ -36,7 +36,7 @@ python demo_server.py
 | `PORT` | `8931` | 监听端口 |
 | `MIN_INTERVAL` | `20` | 全局串行闸间隔（秒）。匿名额度约 1 次/20 秒/IP，**不要调小** |
 | `OUTPUT_DIR` | `./outputs` | 图片落盘目录 |
-| `REMOVE_WATERMARK` | `0` | 全局默认是否去水印（`1` 开启）。请求可用 `remove_watermark` 覆盖 |
+| `REMOVE_WATERMARK` | `0` | 全局默认是否去水印（`1` 开启）。请求可用 `watermark:false` 或 `remove_watermark` 覆盖 |
 | `WM_METHOD` | `off` | 去水印算法：`auto` / `cv2` / `pillow` / `off` |
 | `MAX_RETRIES` | `5` | 上游 503/402 的重试次数（402 走指数退避，上限 120s） |
 
@@ -56,13 +56,19 @@ python demo_server.py
 | `referrer=` / `token=free` / `no_logo=true` | 全部仍有水印 |
 | JPEG EXIF 元数据 | 回显 `"nologo":true` — **服务端受理了参数但不执行** |
 
-所以只能本地处理。本服务提供 `remove_watermark`：
+所以只能本地处理。本服务提供两种请求写法：
 
 ```bash
+# 直连本服务：两种都支持
 curl -X POST http://127.0.0.1:8931/v1/images/generations \
   -H 'Content-Type: application/json' \
-  -d '{"prompt":"a cat","model":"flux","remove_watermark":true}'
+  -d '{"prompt":"a cat","model":"flux","watermark":false}'
+# 等价写法： "remove_watermark": true
 ```
+
+> **经 new-api 接入时必须用 `watermark: false`**。new-api 的 `ImageRequest` 虽把未知字段收进
+> `Extra`，但 `MarshalJSON` 里合并逻辑被刻意注释掉（源码注释「不能合并ExtraFields」），
+> 所以 `remove_watermark` 会被丢弃；而 `watermark` 是已定义字段（`*bool`），会正常转发到上游。
 
 两种算法：
 
@@ -123,7 +129,8 @@ curl -X POST http://127.0.0.1:8931/v1/images/generations \
 | `size` | string | `1024x1024` | `WxH`，各边 128–1536 |
 | `n` | int | `1` | 1–4（串行生成，约 20s/张） |
 | `seed` | int | 随机 | 相同 seed + prompt 结果确定性 |
-| `remove_watermark` | bool | 见环境变量 | 本地去除 pollinations 水印，见下节 |
+| `remove_watermark` | bool | 见环境变量 | 本地去除 pollinations 水印（直连本服务时用） |
+| `watermark` | bool | — | OpenAI 语义：`false` 去水印、`true` 保留。**经 new-api 时用这个**（`remove_watermark` 会被 new-api 丢弃） |
 
 响应中 `_meta.watermark_removed` / `_meta.watermark_method` 会标注是否执行了去水印。
 
@@ -199,8 +206,8 @@ size 越界 → 400            PASS
 n=9 越界 → 400             PASS
 未知路由 → 404             PASS
 未知任务 → 404             PASS
-真实生图 768x768 flux      PASS  200  耗时 29.7s   attempts=2（首次遇 503，退避后成功）
-去水印生成 512x512         PASS  200  耗时 81.6s   removed=True method=inpaint
+真实生图 768x768 flux      PASS  200  耗时 72.5s   attempts=3（持续遇 503，退避重试后成功）
+去水印生成 512x512         PASS  200  耗时 73.9s   removed=True method=inpaint
 异步任务创建                PASS  200
 异步任务完成                PASS  succeeded
 ────────────────────────────────────────────
@@ -221,7 +228,7 @@ python stress_test.py --real   # 含真实生图（约 30s）
 
 ## 已知限制
 
-- **水印**：免费层 `nologo=true` 已失效，水印由服务端强制烙入；可用 `remove_watermark` 本地去除（见上节）
+- **水印**：免费层 `nologo=true` 已失效，水印由服务端强制烙入；可用 `watermark:false`（或 `remove_watermark`）本地去除，见上节
 - **速度**：受匿名额度限制，约 20 秒/张，不适合高并发实时场景
 - **deapi 通道未实现**：App 的另一条主通道 `api.deapi.ai` 需要 Bearer token，该 token 在 **native 层（DCC/libstub.so）** 注入，Java hook 与系统代理均无法捕获，需真机 Frida native hook — 详见 [PROTOCOL.md](PROTOCOL.md) 第 3 节
 
@@ -234,9 +241,10 @@ python stress_test.py --real   # 含真实生图（约 30s）
 | 字段 | 值 |
 |---|---|
 | 类型 | `OpenAI` |
-| 自定义接口地址 | `http://127.0.0.1:8931` |
+| 自定义接口地址 | `http://127.0.0.1:8931`（**不要带 `/v1`**，new-api 会自行拼接 `/v1/images/generations`） |
 | 密钥 | 任意非空（本服务不校验） |
 | 模型 | `flux,turbo,sana,zimage,flux-realism,dall-e-3,dall-e-2` |
+| 去水印 | 请求体传 `watermark: false` |
 
 ---
 

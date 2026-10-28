@@ -274,14 +274,25 @@ class Handler(BaseHTTPRequestHandler):
             except Exception:
                 return None, {"error": {"message": "seed must be an integer", "type": "invalid_request_error"}}
 
-        # 水印处理：默认取环境变量，请求可用 remove_watermark 覆盖
+        # 水印处理优先级：
+        #   1) watermark=false  → 去水印（new-api 原生字段，会透传到上游）
+        #   2) remove_watermark → 去水印（直连本服务时使用）
+        #   3) 环境变量 REMOVE_WATERMARK
+        # 注意：new-api 的 dto.ImageRequest 虽收集未知字段到 Extra，但序列化时刻意不合并，
+        # 因此 remove_watermark 经 new-api 会被丢弃 —— 走 new-api 请用 watermark=false。
+        remove_wm = WM_DEFAULT
+        wm_flag = body.get("watermark")
+        if isinstance(wm_flag, bool):
+            remove_wm = not wm_flag
+        elif wm_flag is not None:
+            remove_wm = str(wm_flag).lower() in ("false", "0", "no")
+
         rw = body.get("remove_watermark")
-        if rw is None:
-            remove_wm = WM_DEFAULT
-        elif isinstance(rw, bool):
-            remove_wm = rw
-        else:
-            remove_wm = str(rw).lower() in ("1", "true", "yes", "on")
+        if rw is not None:
+            if isinstance(rw, bool):
+                remove_wm = rw
+            else:
+                remove_wm = str(rw).lower() in ("1", "true", "yes", "on")
 
         return {"prompt": prompt, "n": n, "w": w, "h": h, "model": model,
                 "seed": seed, "remove_wm": remove_wm}, None

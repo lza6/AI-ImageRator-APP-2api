@@ -236,6 +236,14 @@ App 请求本身带 `nologo=true`，但出图仍有水印。做了完整对照�
 
 实测（768×768）：两种方法去除后 `has_watermark()` 复检均为 `False`。
 
+服务端集成（`demo_server.py`）：
+
+| 触发方式 | 适用场景 | 说明 |
+|---|---|---|
+| `watermark: false` | 经 new-api | new-api `ImageRequest` 已定义该字段（`*bool`），会转发到上游 |
+| `remove_watermark: true` | 直连本服务 | new-api 的 `Extra` 收集后不合并回序列化，经网关会被丢弃 |
+| `REMOVE_WATERMARK=1` | 全局默认 | 环境变量，new-api 侧零改动 |
+
 **检测判据的坑**：最初用「右下角 vs 左下角白像素数对比」，在白底图上失效
 （例：白杯白桌面，左下角白像素 5005 >> 右下角 429 → 漏判）。
 改用**「白色像素且 7px 内有暗描边」**的像素计数（pollinations 水印是白字+黑描边的固定图章）：
