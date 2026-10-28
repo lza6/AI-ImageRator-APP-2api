@@ -1,4 +1,4 @@
 outputs/*.jpg
 __pycache__/
 *.pyc
-server.log
+server*.log
