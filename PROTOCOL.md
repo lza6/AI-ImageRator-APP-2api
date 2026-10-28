@@ -384,3 +384,56 @@ with open('flow.dump', 'rb') as f:
 | enter.pollinations | 上游已下线 |
 
 本仓库交付 pollinations 通道的完整可用实现，含串行闸限速、错误重试、异步任务、demo 页面与压测脚本。
+
+---
+
+## 9. 补充：同厂商另一 App 的原生上游（无水印，已实测）
+
+本 APK（`com.ai.artgenerator.imagegenerator`）**不使用** `techinfortainment.com/ai-generation/`。
+dex 全文检索确认：`ai-generation` / `users/register` 出现次数均为 **0**，
+仅有一处 `more_apps_by_techinfortainment` 的推荐文案。
+
+但同厂商另一 App `com.techinfortainment.imagerator` 使用该上游，协议为：
+
+```
+POST /ai-generation/users/register
+{"device_id":"<32hex>","app_name":"imagerator"}
+→ {"credits":20,"plan":"Ads","type":"Organic","blocked":false}
+
+POST /ai-generation/generate/text2image
+{"prompt","original_prompt","model","width","height","steps","guidance",
+ "negative_prompt","device_id","user_type":"Organic","version":"3","app_name":"imagerator"}
+→ {"request_id":"<uuid>"}
+
+GET /ai-generation/result?request_id=<uuid>&app_name=imagerator
+→ {"status":"processing|completed|failed|expired|blocked",
+   "image_url":"...png","credits_remaining":18}
+
+GET /ai-generation/users/<device_id>/credits?app_name=imagerator
+```
+
+实测（2026-10-28）：
+
+| 项 | 结果 |
+|---|---|
+| 注册 | 无验证，直接送 **20 credits** |
+| 鉴权 | 仅 `device_id`，无签名无加密，可任意伪造 32 hex |
+| 出图 | 约 12s，**1024×1024 PNG，1.99 MB** |
+| 水印 | ✅ **无** |
+| 限速 | 未见按 IP 限流（连续 2 次正常） |
+| 偶发 | 新设备首请求可能 `blocked: Content not allowed`，换设备即恢复 |
+
+对比本仓库采用的 pollinations 通道：
+
+| | pollinations | ai-generation（原生） |
+|---|---|---|
+| 水印 | 有（服务端强制） | 无 |
+| 格式 | JPEG 768/1024 | PNG 1024×1024 |
+| 额度 | ~1 次/20s/IP | 20 credits/设备 |
+| 端点 | 免鉴权 | device_id |
+
+**new-api 已内置该渠道**：`relay/channel/imagerator/`，渠道类型 `ChannelTypeImagerator = 66`，
+含自动号池（`pool.go`：本地池 → 上游同步余额 → 自动注册）。对接方式见
+[docs/new-api对接指南.md](docs/new-api对接指南.md) 第零节。
+
+证据：`real_tests/upstream_native/native_t2i.jpg`（1024×1024，无水印）。

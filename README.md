@@ -6,6 +6,27 @@
 
 ---
 
+## ⚠️ 先看这条：new-api 已有更强的原生渠道
+
+如果你打算把生图接进 **new-api**，请优先使用内置的 **`Imagerator`（渠道类型 66）**——
+它逆向自同厂商**另一个 App**（`com.techinfortainment.imagerator`），走
+`techinfortainment.com/ai-generation/`，实测：
+
+| | 本项目（pollinations 中转） | 原生 ai-generation（渠道 66） |
+|---|---|---|
+| 水印 | ❌ 服务端强制烙入 | ✅ **无** |
+| 分辨率 | 768/1024 JPEG | ✅ **1024×1024 PNG** |
+| 额度 | ~1 次/20s/IP | ✅ **20 credits / 新设备**，无 IP 限速 |
+| 鉴权 | 匿名 | `device_id`（32 hex 可伪造，无签名） |
+
+详见 [docs/new-api对接指南.md](docs/new-api对接指南.md) 第零节。
+
+**本项目存在的意义**：你手上那个 `com.ai.artgenerator.imagegenerator` APK，
+除 pollinations 外的另一条主通道（`api.deapi.ai`）凭证在 native 层拿不到
+（见 [PROTOCOL.md](PROTOCOL.md) 第 3 节），所以 pollinations 是它唯一能纯协议复现的通道。
+
+---
+
 ## 这是什么
 
 AI ImageRator 是一个 Android AI 绘图 App，内置多条生图上游。本项目把其中**唯一免鉴权的通道**还原为可直接调用的 HTTP API：

@@ -1,16 +1,103 @@
 # new-api 对接指南
 
-本项目提供 **OpenAI 兼容**图像生成接口，可直接接入 new-api 的 OpenAI 类型渠道。
+本仓库提供一个 **OpenAI 兼容**的 pollinations 中转服务。
+
+但在对接前，请先看下面这条——**new-api 里已经有一个更强的原生渠道**。
+
+---
+
+## 零、优先方案：new-api 原生 Imagerator 渠道（type 66）
+
+> 结论：**如果你要无水印、1024×1024 出图，直接用原生渠道 `Imagerator`（渠道类型 66），不要用本仓库的中转。**
+
+### 为什么
+
+本仓库逆向的 APK 是 `com.ai.artgenerator.imagegenerator`，它的生图通道是 pollinations（带水印、20s/IP 限流）。
+
+而 new-api 里已有一个 `relay/channel/imagerator` 渠道，逆向自**同厂商另一个 App**
+`com.techinfortainment.imagerator`，走的是完全不同的上游 `techinfortainment.com/ai-generation/`。
+
+两条链路实测对比：
+
+| | pollinations（本仓库中转） | **原生 ai-generation（渠道 66）** |
+|---|---|---|
+| 水印 | ❌ 服务端强制烙入 | ✅ **无** |
+| 分辨率 | 768 / 1024（JPEG） | ✅ **1024×1024 PNG**（1.99 MB 实测） |
+| 鉴权 | 无（匿名） | `device_id`（32 hex，可伪造，无签名无加密） |
+| 额度 | 约 1 次 / 20s / IP | ✅ **20 credits / 新设备**，无按 IP 限速 |
+| 注册 | 无需 | `POST /ai-generation/users/register` 无任何验证 |
+| 号池 | — | new-api 已内置自动注册与余额同步（`pool.go`） |
+
+### 实测记录（2026-10-28，本仓库作者验证）
+
+```bash
+# 1. 注册新设备（任意 32 位 hex）
+POST https://techinfortainment.com/ai-generation/users/register
+{"device_id":"<32hex>","app_name":"imagerator"}
+→ {"credits":20,"plan":"Ads","type":"Organic","blocked":false}
+
+# 2. 提交生成
+POST https://techinfortainment.com/ai-generation/generate/text2image
+{"prompt":"a cozy wooden cabin in a snowy pine forest at dusk",
+ "original_prompt":"<同上>","model":"Flux1schnell","width":768,"height":1024,
+ "steps":4,"guidance":2.5,"negative_prompt":"","device_id":"<32hex>",
+ "user_type":"Organic","version":"3","app_name":"imagerator"}
+→ {"request_id":"749395ce-..."}
+
+# 3. 轮询（约 12s 完成）
+GET https://techinfortainment.com/ai-generation/result?request_id=<id>&app_name=imagerator
+→ {"status":"completed","image_url":"https://techinfortainment.com/media/imagerator/Flux/safe/<uuid>.png",
+   "credits_remaining":18}
+```
+
+实测结果：**1024×1024 PNG、1.99 MB、无水印**。证据见
+[`real_tests/upstream_native/native_t2i.jpg`](../real_tests/upstream_native/native_t2i.jpg)。
+
+### 如何在 new-api 里启用
+
+| 字段 | 值 |
+|---|---|
+| 类型 | `Imagerator`（渠道类型 **66**） |
+| 名称 | 随意 |
+| 基础 URL | 留空（默认 `https://techinfortainment.com`）或显式填 |
+| 密钥 | 留空（device_id 由内置号池自动注册） |
+| 模型 | `imagerator-turbo` / `imagerator-flux` / `imagerator-nanobanana` / `imagerator-i2i` |
+
+模型映射（`relay/channel/imagerator/adaptor.go`）：
+
+| 渠道模型名 | 上游 model |
+|---|---|
+| `imagerator-turbo` | `ZImageTurbo_INT8` |
+| `imagerator-flux` | `Flux1schnell` |
+| `imagerator-nanobanana` | `flux`（上游 NanoBanana 已下移，适配器回落到 flux） |
+| `imagerator-i2i` | `Flux_2_Klein_4B_BF16` |
+
+该渠道同时支持 chat 协议（返回 markdown 图片链接）与 images 协议（返回 OpenAI ImageResponse）。
+
+> ⚠️ 注意：`imagerator` 渠道对应的是**另一个 App**的上游，与本仓库逆向的
+> `com.ai.artgenerator.imagegenerator` 不是同一条链路。若你手上只有后者这个 APK，
+> 它唯一能纯协议复现的就是 pollinations（即本仓库内容）。
+
+### 一个已知现象
+
+新注册设备首次请求偶发返回 `{"status":"blocked","message":"Content not allowed"}`
+（实测同 prompt 换用已有设备即正常）。号池遇到 blocked 建议换设备重试，不要直接判死。
+
+---
+
+## 以下为本仓库中转服务的对接说明
+
+本项目提供 **OpenAI 兼容**图像生成接口，可接入 new-api 的 OpenAI 类型渠道。
 
 服务地址示例：`http://127.0.0.1:8931`
 
-> 本文所有结论均对照 `new-api` 源码核实（`relay/channel/openai/adaptor.go` 的 `GetRequestURL`、
+> 本文结论均对照 `new-api` 源码核实（`relay/channel/openai/adaptor.go` 的 `GetRequestURL`、
 > `relay/common/relay_utils.go` 的 `GetFullRequestURL`、`relaykit/dto/openai_image.go` 的 `ImageRequest`），
 > 不是猜测。
 
 ---
 
-## 一、渠道配置（推荐方案）
+## 一、渠道配置（本仓库中转方案）
 
 new-api 后台 → **渠道** → **添加渠道**
 
