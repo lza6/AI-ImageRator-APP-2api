@@ -196,12 +196,15 @@ size 越界 → 400            PASS
 n=9 越界 → 400             PASS
 未知路由 → 404             PASS
 未知任务 → 404             PASS
-真实生图 768x768 flux      PASS  200  耗时 5.7s  b64 85608 chars
+真实生图 768x768 flux      PASS  200  耗时 7.8s   b64 88892 chars
+去水印生成 512x512         PASS  200  耗时 44.7s  removed=True method=inpaint
 异步任务创建                PASS  200
 异步任务完成                PASS  succeeded
 ────────────────────────────────────────────
-总计: 13/13 PASS
+总计: 14/14 PASS
 ```
+
+> 真实用例之间需冷却约 30s（匿名额度 1 次/20s/IP），`stress_test.py` 已内置。
 
 真实出图证据见 [`real_tests/`](real_tests/)（`sana.jpg` / `flux-realism.jpg` / `turbo_768.jpg`，均为上游原始 JPEG）。
 
