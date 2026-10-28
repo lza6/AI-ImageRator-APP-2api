@@ -1,0 +1,4 @@
+outputs/*.jpg
+__pycache__/
+*.pyc
+server.log

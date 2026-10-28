@@ -1,0 +1,32 @@
+[
+  {
+    "model": "flux",
+    "error": "HTTP Error 503: Service Unavailable"
+  },
+  {
+    "model": "turbo",
+    "error": "HTTP Error 402: Payment Required"
+  },
+  {
+    "model": "sana",
+    "status": 200,
+    "bytes": 82204,
+    "sec": 5.92,
+    "ok": true
+  },
+  {
+    "model": "zimage",
+    "error": "HTTP Error 402: Payment Required"
+  },
+  {
+    "model": "flux-realism",
+    "status": 200,
+    "bytes": 82204,
+    "sec": 4.54,
+    "ok": true
+  },
+  {
+    "model": "kontext",
+    "error": "HTTP Error 403: Forbidden"
+  }
+]
