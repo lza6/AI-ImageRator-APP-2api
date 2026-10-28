@@ -1,0 +1,4 @@
+# 可选依赖：启用 cv2 高质量去水印
+# 不装也能跑（demo_server.py 本身零依赖，水印会回退到纯 Pillow 方案或直接跳过）
+pillow>=10.0
+opencv-python-headless>=4.8

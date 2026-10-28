@@ -112,6 +112,28 @@ def main():
         print("%-42s %s  %d  耗时 %.1fs  %s" % ("真实生图 768x768 flux", "PASS" if ok else "FAIL", code, el, detail))
         results.append(ok)
 
+        # 去水印路径
+        code, raw, el = req("POST", "/v1/images/generations", {
+            "prompt": "a bookshelf against a plain wall",
+            "size": "512x512", "model": "sana", "n": 1,
+            "remove_watermark": True,
+        }, timeout=240)
+        ok = False
+        detail = raw[:120].decode("utf-8", "ignore")
+        if code == 200:
+            d = json.loads(raw)
+            m = d["data"][0]["_meta"]
+            ok = bool(m.get("watermark_removed"))
+            detail = "removed=%s method=%s bytes=%d" % (
+                m.get("watermark_removed"), m.get("watermark_method"),
+                len(__import__("base64").b64decode(d["data"][0]["b64_json"])))
+        print("%-42s %s  %d  耗时 %.1fs  %s" % ("去水印生成 512x512", "PASS" if ok else "FAIL", code, el, detail))
+        results.append(ok)
+
+        # 上游匿名额度约 1 次/20s/IP，连跑真实用例需冷却，否则会被 503/402 打回
+        print("%-42s      … 冷却 30s 等待上游额度恢复" % "（间隔）")
+        time.sleep(30)
+
         # 异步任务
         code, raw, el = req("POST", "/v1/images/async", {
             "prompt": "a cozy cabin in a snowy forest", "size": "512x512", "model": "turbo",

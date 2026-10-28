@@ -36,6 +36,46 @@ python demo_server.py
 | `PORT` | `8931` | 监听端口 |
 | `MIN_INTERVAL` | `20` | 全局串行闸间隔（秒）。匿名额度约 1 次/20 秒/IP，**不要调小** |
 | `OUTPUT_DIR` | `./outputs` | 图片落盘目录 |
+| `REMOVE_WATERMARK` | `0` | 全局默认是否去水印（`1` 开启）。请求可用 `remove_watermark` 覆盖 |
+| `WM_METHOD` | `off` | 去水印算法：`auto` / `cv2` / `pillow` / `off` |
+
+---
+
+## 水印（重要）
+
+出图右下角的 **pollinations.ai 水印是服务端烙进 JPEG 的**，不是 App 客户端叠加。
+
+实测证据（见 [PROTOCOL.md](PROTOCOL.md) §4.5）：
+
+| 测试 | 结果 |
+|---|---|
+| `nologo=true` | 仍有水印 |
+| `nologo=false` | 仍有水印 |
+| 不带 `nologo` | 仍有水印（右下角高亮像素数完全一致：673） |
+| `referrer=` / `token=free` / `no_logo=true` | 全部仍有水印 |
+| JPEG EXIF 元数据 | 回显 `"nologo":true` — **服务端受理了参数但不执行** |
+
+所以只能本地处理。本服务提供 `remove_watermark`：
+
+```bash
+curl -X POST http://127.0.0.1:8931/v1/images/generations \
+  -H 'Content-Type: application/json' \
+  -d '{"prompt":"a cat","model":"flux","remove_watermark":true}'
+```
+
+两种算法：
+
+| 方法 | 依赖 | 质量 |
+|---|---|---|
+| `cv2`（inpaint TELEA） | `opencv-python-headless` | 纹理区域更平滑，纯色/虚化背景几乎无痕 |
+| `pillow`（clone + 羽化） | 无（纯 Pillow） | 保留纹理但可能有轻微水平接缝 |
+
+`auto` 优先用 cv2，缺失时回退 pillow。**建议只在必要时开启**——去水印是对成品的二次修改，细节纹理区域会留下轻微痕迹。
+
+```bash
+pip install pillow opencv-python-headless   # 可选，启用 cv2 高质量模式
+WM_METHOD=auto REMOVE_WATERMARK=1 python demo_server.py
+```
 
 ---
 
@@ -80,6 +120,9 @@ curl -X POST http://127.0.0.1:8931/v1/images/generations \
 | `size` | string | `1024x1024` | `WxH`，各边 128–1536 |
 | `n` | int | `1` | 1–4（串行生成，约 20s/张） |
 | `seed` | int | 随机 | 相同 seed + prompt 结果确定性 |
+| `remove_watermark` | bool | 见环境变量 | 本地去除 pollinations 水印，见下节 |
+
+响应中 `_meta.watermark_removed` / `_meta.watermark_method` 会标注是否执行了去水印。
 
 ### `POST /v1/images/async` · `GET /v1/images/async/{id}`
 
@@ -171,7 +214,7 @@ python stress_test.py --real   # 含真实生图（约 30s）
 
 ## 已知限制
 
-- **水印**：免费层 `nologo=true` 不生效，出图右下角固定带 `pollinations.ai` 水印
+- **水印**：免费层 `nologo=true` 已失效，水印由服务端强制烙入；可用 `remove_watermark` 本地去除（见上节）
 - **速度**：受匿名额度限制，约 20 秒/张，不适合高并发实时场景
 - **deapi 通道未实现**：App 的另一条主通道 `api.deapi.ai` 需要 Bearer token，该 token 在 **native 层（DCC/libstub.so）** 注入，Java hook 与系统代理均无法捕获，需真机 Frida native hook — 详见 [PROTOCOL.md](PROTOCOL.md) 第 3 节
 
@@ -194,6 +237,7 @@ python stress_test.py --real   # 含真实生图（约 30s）
 
 ```
 demo_server.py          OpenAI 兼容服务（零依赖）
+watermark.py            水印检测与去除（cv2 可选增强）
 demo.html               中文 Web UI
 stress_test.py          压测脚本
 PROTOCOL.md             完整逆向报告

@@ -96,6 +96,29 @@ server {
 
 ---
 
+## 水印处理
+
+出图右下角的 pollinations.ai 水印是**上游服务端烙进 JPEG 的**，`nologo` 参数已被服务端忽略（EXIF 元数据回显 `"nologo":true` 但水印依旧），参数侧无法去除。
+
+要交付无水印图片，二选一：
+
+### 方式一：服务端默认去水印
+
+```bash
+REMOVE_WATERMARK=1 WM_METHOD=auto python demo_server.py
+pip install pillow opencv-python-headless   # 启用 cv2 高质量 inpaint
+```
+
+此后所有请求都自动去水印，new-api 侧无需改动。
+
+### 方式二：按请求开启
+
+请求体加 `remove_watermark: true`。若 new-api 的渠道配置不能透传自定义字段，用方式一更省事。
+
+> ⚠️ 去水印属于对成品的二次修改：纯色/虚化背景几乎无痕，高频纹理区域可能有轻微涂抹。对保真度敏感的场景建议保留原图。
+
+---
+
 ## 计费与配额建议
 
 new-api 侧建议按 **图片张数** 计费，而不是按 token。
@@ -142,7 +165,7 @@ new-api 侧建议按 **图片张数** 计费，而不是按 token。
 | `400 prompt is required` | prompt 为空 | 检查请求体 |
 | `400 size out of range` | 边长超 128–1536 | 调整尺寸 |
 | new-api 渠道测试失败 | 本服务无 chat 端点 | 正常，用生图请求验证 |
-| 图片右下角有水印 | 免费层特性 | 无法去除（`nologo` 不生效） |
+| 图片右下角有水印 | 服务端强制烙入，`nologo` 已失效 | 用 `REMOVE_WATERMARK=1` 或请求 `remove_watermark:true` |
 | 响应很慢（>20s） | 串行闸等待 | 正常行为，用异步端点 |
 
 ---

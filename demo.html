@@ -97,6 +97,22 @@
       </div>
     </div>
 
+    <div class="row2">
+      <div>
+        <label>水印处理</label>
+        <select id="removeWm">
+          <option value="false">保留水印（上游原图）</option>
+          <option value="true">本地去除水印（inpaint / clone）</option>
+        </select>
+      </div>
+      <div>
+        <label>&nbsp;</label>
+        <div style="font-size:11px;color:#737a8c;padding:11px 2px;line-height:1.5">
+          水印由 pollinations <b>服务端</b>烙入，<code>nologo</code> 参数已失效，只能本地处理
+        </div>
+      </div>
+    </div>
+
     <button id="go">生成图片</button>
     <div class="status" id="status">就绪</div>
     <div class="grid" id="out"></div>
@@ -147,7 +163,9 @@ $('go').onclick = async () => {
       model: $('model').value,
       size: $('size').value,
       n: parseInt($('n').value, 10),
+      remove_watermark: $('removeWm').value === 'true',
     };
+    if (body.remove_watermark) setStatus('生成中…（含水印处理，稍慢一点）');
     const sd = $('seed').value.trim();
     if (sd) body.seed = parseInt(sd, 10);
 
@@ -170,7 +188,8 @@ $('go').onclick = async () => {
       img.src = 'data:image/jpeg;base64,' + item.b64_json;
       const meta = document.createElement('div');
       meta.className = 'meta';
-      meta.textContent = `${item._meta.model} · seed ${item._meta.seed} · ${item._meta.attempts} 次尝试`;
+      meta.textContent = `${item._meta.model} · seed ${item._meta.seed} · ${item._meta.attempts} 次尝试`
+        + (item._meta.watermark_removed ? ` · 已去水印(${item._meta.watermark_method})` : '');
       card.appendChild(img);
       card.appendChild(meta);
       $('out').appendChild(card);

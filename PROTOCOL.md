@@ -177,11 +177,69 @@ Server: cloudflare
 
 `X-PAYMENT` / `Payment-Signature` 头说明 pollinations 已接入 x402 付费协议，付费可绕过限速——免费层无此凭证。
 
-### 4.5 水印
+### 4.5 水印归因（已定论：服务端烙入）
 
-`nologo=true` 在免费层**不生效**，出图右下角恒定带 `pollinations.ai` 水印（已验证 768×768 与 1024×1024 均存在）。
+App 请求本身带 `nologo=true`，但出图仍有水印。做了完整对照实验（同 prompt + 同 seed 777，768×768，model=flux）：
 
----
+| 变体 | 请求参数 | 右下角白像素 | 左下角白像素 | 判定 |
+|---|---|---|---|---|
+| `nologo=true` | `&nologo=true` | 673 | 0 | 有水印 |
+| `nologo=false` | `&nologo=false` | — | — | 有水印 |
+| 不带 nologo | 无该参数 | 673 | 0 | 有水印 |
+| `referrer=imageRator` | `&nologo=true&referrer=imageRator` | 673 | 0 | 有水印 |
+| `referrer=pollinations` | 同上 | 673 | 0 | 有水印 |
+| `token=free` | `&nologo=true&token=free` | 673 | 0 | 有水印 |
+| `no_logo=true` | `&nologo=true&no_logo=true` | 673 | 0 | 有水印 |
+
+**决定性证据**：JPEG 的 EXIF `UserComment`（tag 37510）回显了服务端解析后的请求元数据：
+
+```json
+{
+  "prompt": "a red apple on a wooden table",
+  "width": 768, "height": 768, "seed": 777,
+  "model": "sana",
+  "enhance": true,
+  "nologo": true,          // ← 服务端收到并回显了 true
+  "nofeed": true, "safe": false, "quality": "medium",
+  "isMature": false, "isChild": false,
+  "trackingData": { "actualModel": "sana", "usage": { "completionImageTokens": 1 } }
+}
+```
+
+即：**服务端受理了 `nologo=true`，但水印仍然绘制** → 水印是后端后处理阶段无条件烙入的，参数侧无解。
+
+补充观察：
+- `model=flux` 请求，元数据 `actualModel=sana` → 免费层实际路由到可用模型，印证 §4.3「跨模型返回相同字节」
+- 所有变体返回字节数完全一致（55231B）→ 参数不影响出图内容，只影响元数据记录
+
+### 4.6 App 侧是否有自己的水印
+
+排查结论：**没有**。
+
+| 检查项 | 结果 |
+|---|---|
+| dex 中 `watermark` 相关字符串 | 仅 AdMob/广告 SDK 的（`gads:video:force_watermark`、`watermark_overlay_png_base64` 等） |
+| `com.tit.imagegenerator.*` 内 `Canvas.drawText` 合成水印 | 未发现 |
+| `waterMarkIV`（`g6/f` 布局中的 ImageView） | 仅为 BottomSheet **UI 上的图片控件**（预览标记），不写像素 |
+| RC 配置 `is_max_size_watermark = true` | 控制"最大尺寸是否加标记"的开关，属 UI 展示逻辑 |
+
+所以 App 拿到的就是 pollinations 已带水印的图，2API 直接取上游字节，水印来源单一。
+
+### 4.7 去水印方案（本仓库 `watermark.py`）
+
+水印位置固定锚定右下角（相对坐标 x≈0.78–0.99、y≈0.957–0.983，随图幅等比缩放）。
+
+| 方案 | 做法 | 质量 | 依赖 |
+|---|---|---|---|
+| `cv2` | 区域检测白字+暗描边生成 mask → `cv2.inpaint(TELEA, r=7)` | 纯色/虚化背景几乎无痕；高频纹理有轻微涂抹 | opencv |
+| `pillow` | 从水印正上方同尺寸带克隆覆盖 + 高斯柔化 + 30% 羽化过渡 | 保留纹理，可能有水平接缝 | 无 |
+
+实测（768×768）：两种方法去除后 `has_watermark()` 复检均为 `False`。
+
+不可行方案记录：
+- `gen.pollinations.ai`（新版 API）匿名 401，需 `sk_`/`pk_` key（付费 x402 USDC）
+- 旧端点 `/p/{prompt}` → 402
+- 参数侧（`referrer`/`token`/`no_logo`）→ 全部无效
 
 ## 5. 辅助接口（明文 HTTP）
 

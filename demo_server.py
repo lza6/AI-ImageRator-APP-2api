@@ -28,11 +28,20 @@ import urllib.request
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+try:
+    import watermark as wm_mod
+except Exception:
+    wm_mod = None
+
 PORT = int(os.environ.get("PORT", "8931"))
 OUTPUT_DIR = os.environ.get("OUTPUT_DIR", os.path.join(os.path.dirname(__file__), "outputs"))
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 UPSTREAM = "https://image.pollinations.ai/prompt/"
+
+# 水印处理默认策略：off（保真） | auto | cv2 | pillow
+WM_METHOD = os.environ.get("WM_METHOD", "off")
+WM_DEFAULT = os.environ.get("REMOVE_WATERMARK", "0") in ("1", "true", "yes")
 
 # App 内 model 名 → pollinations model 参数
 # App: i6.b.u='kontext', Flux1schnell / ZImageTurbo_INT8 / Turbo / flux (k6/g.a 内判定)
@@ -86,6 +95,17 @@ def build_url(prompt, width, height, model, seed, enhance=True, private=True):
         "safe": "false",
     }
     return UPSTREAM + q + "?" + urllib.parse.urlencode(params)
+
+
+def apply_watermark_policy(data, meta, remove_wm):
+    """按策略处理水印，返回 (bytes, meta)"""
+    if not remove_wm or wm_mod is None:
+        meta["watermark_removed"] = False
+        return data, meta
+    out, info = wm_mod.remove(data, WM_METHOD if WM_METHOD != "off" else "auto")
+    meta["watermark_removed"] = bool(info.get("removed"))
+    meta["watermark_method"] = info.get("method") or info.get("reason")
+    return out, meta
 
 
 def generate(prompt, width=1024, height=1024, model="flux", seed=None, max_retries=3):
@@ -160,7 +180,15 @@ class Handler(BaseHTTPRequestHandler):
         path = urllib.parse.urlparse(self.path).path
 
         if path == "/health":
-            return self._send(200, {"status": "ok", "ts": int(time.time())})
+            return self._send(200, {
+                "status": "ok",
+                "ts": int(time.time()),
+                "watermark": {
+                    "default_remove": WM_DEFAULT,
+                    "method": WM_METHOD,
+                    "capabilities": wm_mod.capabilities() if wm_mod else None,
+                },
+            })
 
         if path == "/stats":
             with STATS_LOCK:
@@ -243,7 +271,17 @@ class Handler(BaseHTTPRequestHandler):
             except Exception:
                 return None, {"error": {"message": "seed must be an integer", "type": "invalid_request_error"}}
 
-        return {"prompt": prompt, "n": n, "w": w, "h": h, "model": model, "seed": seed}, None
+        # 水印处理：默认取环境变量，请求可用 remove_watermark 覆盖
+        rw = body.get("remove_watermark")
+        if rw is None:
+            remove_wm = WM_DEFAULT
+        elif isinstance(rw, bool):
+            remove_wm = rw
+        else:
+            remove_wm = str(rw).lower() in ("1", "true", "yes", "on")
+
+        return {"prompt": prompt, "n": n, "w": w, "h": h, "model": model,
+                "seed": seed, "remove_wm": remove_wm}, None
 
     def _handle_generate(self, body):
         args, err = self._validate(body)
@@ -257,6 +295,7 @@ class Handler(BaseHTTPRequestHandler):
             for i in range(args["n"]):
                 seed = args["seed"] + i if args["seed"] is not None else None
                 data, meta = generate(args["prompt"], args["w"], args["h"], args["model"], seed)
+                data, meta = apply_watermark_policy(data, meta, args["remove_wm"])
                 fn = "%s.jpg" % hashlib.md5(data).hexdigest()[:16]
                 with open(os.path.join(OUTPUT_DIR, fn), "wb") as f:
                     f.write(data)
@@ -293,6 +332,7 @@ class Handler(BaseHTTPRequestHandler):
                 TASKS[tid]["status"] = "running"
             try:
                 data, meta = generate(args["prompt"], args["w"], args["h"], args["model"], args["seed"])
+                data, meta = apply_watermark_policy(data, meta, args["remove_wm"])
                 fn = "%s.jpg" % hashlib.md5(data).hexdigest()[:16]
                 with open(os.path.join(OUTPUT_DIR, fn), "wb") as f:
                     f.write(data)

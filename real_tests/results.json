@@ -33,5 +33,10 @@
     "model": "turbo",
     "note": "最终烟雾测试: 经 demo_server 全局串行闸，含 20s 等待，端到端 53s，JPEG 768x768 102859B",
     "ok": true
+  },
+  {
+    "model": "flux",
+    "note": "服务端 remove_watermark:true 端到端验证: 出图后本地 inpaint 去水印，has_watermark() 复检 False，97411B",
+    "ok": true
   }
 ]
