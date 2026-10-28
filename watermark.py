@@ -14,7 +14,7 @@ pollinations 水印去除模块
 import io
 
 try:
-    from PIL import Image, ImageFilter
+    from PIL import Image, ImageChops, ImageFilter
     _HAS_PIL = True
 except ImportError:
     _HAS_PIL = False
@@ -34,8 +34,39 @@ def _region(img_w, img_h):
     return int(img_w * RX0), int(img_h * RY0), img_w, img_h
 
 
+def _threshold(w, h):
+    """水印像素数阈值（随面积缩放）：带印约 0.0045~0.007×面积，无印 <0.0002×面积"""
+    return max(250, int(w * h * 0.0012))
+
+
+def _outlined_text_score(gray_roi):
+    """统计「白字 + 近邻暗描边」像素数 —— pollinations 水印的显著特征"""
+    bright = (gray_roi > 190).astype(np.uint8)
+    dark = (gray_roi < 95).astype(np.uint8)
+    k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
+    near_dark = cv2.dilate(dark, k, iterations=1)
+    outlined = cv2.bitwise_and(bright, near_dark)
+    return int(cv2.dilate(outlined, k, iterations=1).sum())
+
+
+def _outlined_text_score_pil(gray_im):
+    """纯 Pillow 版同样判据：白字 ∩ 膨胀后的暗像素"""
+    bright = gray_im.point(lambda v: 255 if v > 190 else 0)
+    dark = gray_im.point(lambda v: 255 if v < 95 else 0)
+    near_dark = dark.filter(ImageFilter.MaxFilter(7))
+    outlined = ImageChops.multiply(bright, near_dark)
+    outlined = outlined.filter(ImageFilter.MaxFilter(7))
+    return int(sum(1 for v in outlined.get_flattened_data() if v > 0))
+
+
 def has_watermark(jpeg_bytes):
-    """粗判：右下角高亮像素显著多于左下角 → 判定有水印"""
+    """
+    检测右下角是否存在 pollinations 水印。
+
+    判据：右下角区域内「白色像素且 7px 内有暗像素」的数量（白字 + 暗描边的特征）。
+    不能用「右下 vs 左下亮度对比」——白底图（如白杯白桌）会在左下产生大量白像素导致漏判。
+    无 cv2 时走纯 Pillow 路径；连 Pillow 都没有才返回 None。
+    """
     if not _HAS_PIL:
         return None
     try:
@@ -43,16 +74,13 @@ def has_watermark(jpeg_bytes):
     except Exception:
         return None
     w, h = im.size
-    bh = max(int(h * 0.07), 8)
-    bw = max(int(w * 0.28), 40)
-
-    def bright(box):
-        patch = im.crop(box)
-        return sum(1 for r, g, b in patch.get_flattened_data() if r > 195 and g > 195 and b > 195)
-
-    rb = bright((w - bw, h - bh, w, h))
-    lb = bright((0, h - bh, bw, h))
-    return (rb - lb) > 150
+    x0, y0, _, _ = _region(w, h)
+    gray_im = im.crop((x0, y0, w, h)).convert("L")
+    if _HAS_CV2:
+        score = _outlined_text_score(np.array(gray_im))
+    else:
+        score = _outlined_text_score_pil(gray_im)
+    return score > _threshold(w, h)
 
 
 def _mask_cv2(img):
@@ -66,12 +94,10 @@ def _mask_cv2(img):
     _, dark = cv2.threshold(gray, 95, 255, cv2.THRESH_BINARY_INV)
 
     k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
-    bright_d = cv2.dilate(bright, k, iterations=2)
-    # 白字附近有暗描边 → 更可能是水印文字
+    # 只取「白字且近邻有暗描边」的像素，避免白底图整片被 mask 掉
     near_dark = cv2.dilate(dark, k, iterations=2)
-    text = cv2.bitwise_and(bright_d, near_dark)
-    mask = cv2.bitwise_or(bright_d, text)
-    mask = cv2.dilate(mask, k, iterations=2)
+    text = cv2.bitwise_and(bright, near_dark)
+    mask = cv2.dilate(text, k, iterations=3)   # 膨胀覆盖描边
 
     full = np.zeros((h, w), np.uint8)
     full[y0:y1, x0:x1] = mask

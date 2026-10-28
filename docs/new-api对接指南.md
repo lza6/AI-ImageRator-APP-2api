@@ -159,8 +159,9 @@ new-api 侧建议按 **图片张数** 计费，而不是按 token。
 
 | 现象 | 原因 | 处理 |
 |---|---|---|
-| `502 upstream_error` + `HTTP 503` | 触发匿名限流 | 等待 45–60s；调大 `MIN_INTERVAL` |
-| `502` + `HTTP 402` | 额度耗尽 | 换出口 IP |
+| `502 upstream_error` + `HTTP 503` | 触发匿名限流（连发） | 等待 45–60s；调大 `MIN_INTERVAL` |
+| `502` + `HTTP 402` | 额度耗尽（该 IP 已长时间高频） | 换出口 IP；或调大 `MAX_RETRIES` 走指数退避 |
+| 连续多次 502 | 该 IP 进入长冷却（可数十分钟） | 只能换 IP，重试无意义 |
 | `upstream 403 (model ... unsupported)` | 该模型不支持纯文生图（如 `kontext`） | 改用 `flux` / `turbo` / `sana` / `zimage` |
 | `400 prompt is required` | prompt 为空 | 检查请求体 |
 | `400 size out of range` | 边长超 128–1536 | 调整尺寸 |

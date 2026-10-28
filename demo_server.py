@@ -68,6 +68,7 @@ DEFAULT_MODEL = "flux"
 RATE_LOCK = threading.Lock()
 LAST_CALL = [0.0]
 MIN_INTERVAL = float(os.environ.get("MIN_INTERVAL", "20"))
+MAX_RETRIES = int(os.environ.get("MAX_RETRIES", "5"))
 
 STATS = {"requests": 0, "success": 0, "failed": 0, "bytes": 0}
 STATS_LOCK = threading.Lock()
@@ -107,14 +108,15 @@ def apply_watermark_policy(data, meta, remove_wm):
     return out, meta
 
 
-def generate(prompt, width=1024, height=1024, model="flux", seed=None, max_retries=3):
+def generate(prompt, width=1024, height=1024, model="flux", seed=None, max_retries=None):
     """调用上游生图，返回 (jpeg_bytes, meta)。串行闸保证不触发限流。"""
     seed = seed if seed is not None else int(time.time() * 1000) % 2147483647
     m = MODEL_MAP.get(str(model).lower(), DEFAULT_MODEL)
     url = build_url(prompt, width, height, m, seed)
+    attempts = max_retries or MAX_RETRIES
 
     last_err = None
-    for attempt in range(max_retries):
+    for attempt in range(attempts):
         # 全局串行闸
         with RATE_LOCK:
             wait = MIN_INTERVAL - (time.time() - LAST_CALL[0])
@@ -137,14 +139,16 @@ def generate(prompt, width=1024, height=1024, model="flux", seed=None, max_retri
             # 403 = 模型不支持该参数组合
             if e.code == 403:
                 raise RuntimeError("upstream 403 (model '%s' unsupported for this request)" % m)
-            # 503/402 = 限流，退避后重试
+            # 503 = 瞬时限流；402 = 额度耗尽，需要更长冷却
             retry_after = int(e.headers.get("Retry-After", "10") or 10)
-            time.sleep(max(retry_after, MIN_INTERVAL))
+            base = max(retry_after, MIN_INTERVAL)
+            penalty = base * (2 ** attempt) if e.code == 402 else base
+            time.sleep(min(penalty, 120))
         except Exception as e:
             last_err = str(e)[:200]
             time.sleep(MIN_INTERVAL)
 
-    raise RuntimeError("upstream failed after %d attempts: %s" % (max_retries, last_err))
+    raise RuntimeError("upstream failed after %d attempts: %s" % (attempts, last_err))
 
 
 class Handler(BaseHTTPRequestHandler):

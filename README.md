@@ -38,6 +38,7 @@ python demo_server.py
 | `OUTPUT_DIR` | `./outputs` | 图片落盘目录 |
 | `REMOVE_WATERMARK` | `0` | 全局默认是否去水印（`1` 开启）。请求可用 `remove_watermark` 覆盖 |
 | `WM_METHOD` | `off` | 去水印算法：`auto` / `cv2` / `pillow` / `off` |
+| `MAX_RETRIES` | `5` | 上游 503/402 的重试次数（402 走指数退避，上限 120s） |
 
 ---
 
@@ -69,6 +70,8 @@ curl -X POST http://127.0.0.1:8931/v1/images/generations \
 |---|---|---|
 | `cv2`（inpaint TELEA） | `opencv-python-headless` | 纹理区域更平滑，纯色/虚化背景几乎无痕 |
 | `pillow`（clone + 羽化） | 无（纯 Pillow） | 保留纹理但可能有轻微水平接缝 |
+
+检测判据用「白字 + 近邻暗描边」像素计数（而非左右亮度对比——白底图会漏判），阈值随图幅面积缩放。
 
 `auto` 优先用 cv2，缺失时回退 pillow。**建议只在必要时开启**——去水印是对成品的二次修改，细节纹理区域会留下轻微痕迹。
 
